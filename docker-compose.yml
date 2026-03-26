@@ -1,0 +1,63 @@
+services:
+  redis-master:
+    image: redis/redis-stack-server:7.2.0-v10 # Pin specific versions in prod
+    container_name: redis-master
+    restart: always
+    networks:
+      - redis_network
+    environment:
+      - REDIS_ARGS=--requirepass ${REDIS_PASSWORD} --masterauth ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - redis_master_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 1G
+
+  redis-replica:
+    image: redis/redis-stack-server:7.2.0-v10
+    container_name: redis-replica
+    restart: always
+    networks:
+      - redis_network
+    environment:
+      - REDIS_ARGS=--requirepass ${REDIS_PASSWORD} --masterauth ${REDIS_PASSWORD} --replicaof redis-master 6379 --appendonly yes
+    volumes:
+      - redis_replica_data:/data
+      - ./failover.sh:/usr/local/bin/failover.sh:ro
+    entrypoint: >
+      sh -c "chmod +x /usr/local/bin/failover.sh && 
+             /usr/local/bin/failover.sh & 
+             /entrypoint.sh"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: haproxy-lb
+    restart: always
+    networks:
+      - redis_network
+    ports:
+      - "6379:6379"   # Redis Port
+      - "8001:8001"   # Redis Insight/UI Port
+      - "8404:8404"   # HAProxy Stats
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - redis-master
+
+networks:
+  redis_network:
+    driver: bridge
+
+volumes:
+  redis_master_data:
+  redis_replica_data:
